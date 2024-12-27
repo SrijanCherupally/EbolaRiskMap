@@ -2,11 +2,12 @@ import pandas as pd
 import numpy as np
 import random
 import torch
-from sklearn.preprocessing import StandardScaler
+from sklearn.preprocessing import StandardScaler, MinMaxScaler
 from sklearn.cluster import KMeans
 from sklearn.impute import SimpleImputer
 import plotly.express as px
 import plotly.io as pio
+from datetime import datetime, timedelta
 
 # Set random seed for reproducibility
 random.seed(42)
@@ -36,64 +37,86 @@ bat_data['GPS long'] = bat_data['GPS long'].apply(clean_coordinates)
 # Drop rows with missing lat/long coordinates
 bat_data = bat_data.dropna(subset=['GPS lat', 'GPS long'])
 
+# Function to determine the season based on the date
+def get_season(date):
+    month = date.month
+    if month in [12, 1, 2]:
+        return 'winter'
+    elif month in [3, 4, 5]:
+        return 'spring'
+    elif month in [6, 7, 8]:
+        return 'summer'
+    elif month in [9, 10, 11]:
+        return 'fall'
+
+# Function to get productivity factor based on the season
+def get_productivity_factor(season):
+    if season == 'winter':
+        return 0.1
+    elif season == 'spring':
+        return 0.5
+    elif season == 'summer':
+        return 1.0
+    elif season == 'fall':
+        return 0.7
+
 # Bat migration algorithm
-def simulate_bat_migration(lat, lon, month):
+def simulate_bat_migration(lat, lon, date):
     """
     Simulate bat migration using an algorithm based on proximity to favorable regions, 
     seasonal variations, and random variability.
     """
-    # Favorable region is centered roughly at equatorial Africa
-    seasonal_factor = np.sin((month - 1) * np.pi / 6)  # Sinusoidal seasonal variation
-    random_lat_shift = np.random.uniform(-5.0, 5.0)  # Larger latitude shift
-    random_lon_shift = np.random.uniform(-5.0, 5.0)  # Larger longitude shift
+    season = get_season(date)
+    seasonal_factor = np.sin((date.month - 1) * np.pi / 6)  # Sinusoidal seasonal variation
+    daily_variability = np.random.uniform(-1.0, 1.0)  # Increased daily variability factor
+    random_lat_shift = np.random.uniform(-0.5, 0.5)  # Larger latitude shift for more noticeable changes
+    random_lon_shift = np.random.uniform(-0.5, 0.5)  # Larger longitude shift for more noticeable changes
 
     # Adjust latitude and longitude based on migration factors
-    migration_lat = lat + random_lat_shift * seasonal_factor
-    migration_lon = lon + random_lon_shift * seasonal_factor
+    if season == 'winter':
+        migration_lat = lat - abs(random_lat_shift) + daily_variability  # Move to lower latitudes
+    else:
+        migration_lat = lat + random_lat_shift * seasonal_factor + daily_variability
+    migration_lon = lon + random_lon_shift * seasonal_factor + daily_variability
 
-    # Migration Factor (less impactful on Risk Score)
-    migration_factor = np.clip(1 + seasonal_factor * np.random.uniform(-0.1, 0.1), 0.9, 1.1)
+    # Migration Factor (more impactful on Risk Score)
+    migration_factor = np.clip(1 + seasonal_factor * np.random.uniform(-0.2, 0.2), 0.8, 1.2)
 
-    return migration_lat, migration_lon, migration_factor
+    return migration_lat, migration_lon, migration_factor, season
 
-# Pre-simulate migrations for all months
-monthly_migrations = {}
-for month in range(1, 13):
-    migration_results = bat_data.apply(
-        lambda row: simulate_bat_migration(row['GPS lat'], row['GPS long'], month), axis=1
-    )
-    migrated_data = bat_data.copy()
-    migrated_data[['GPS lat', 'GPS long', 'Migration Factor']] = pd.DataFrame(
-        migration_results.tolist(), index=bat_data.index
-    )
-    migrated_data['Risk Score'] = migrated_data['Average'] * migrated_data['Migration Factor']
-    migrated_data['Risk Score'] = migrated_data['Risk Score'].fillna(migrated_data['Risk Score'].mean())
-    monthly_migrations[month] = migrated_data
-
-# Function to input the month manually
-def get_user_month():
+# Function to input the date manually
+def get_user_date():
     while True:
         try:
-            month = int(input("Enter the month (1-12): "))
-            if 1 <= month <= 12:
-                return month
-            else:
-                print("Please enter a valid month number between 1 and 12.")
+            date_str = input("Enter the date (YYYY-MM-DD): ")
+            date = datetime.strptime(date_str, "%Y-%m-%d")
+            return date
         except ValueError:
-            print("Invalid input! Please enter a number between 1 and 12.")
+            print("Invalid input! Please enter a date in the format YYYY-MM-DD.")
 
-# Get user-selected month
-selected_month = get_user_month()
+# Get user-selected date
+selected_date = get_user_date()
 
-# Use the pre-simulated data for the selected month
-bat_data = monthly_migrations[selected_month]
+# Simulate migrations for the selected date
+migration_results = bat_data.apply(
+    lambda row: simulate_bat_migration(row['GPS lat'], row['GPS long'], selected_date), axis=1
+)
+migrated_data = bat_data.copy()
+migrated_data[['GPS lat', 'GPS long', 'Migration Factor', 'Season']] = pd.DataFrame(
+    migration_results.tolist(), index=bat_data.index
+)
+
+# Adjust risk score based on productivity factor
+migrated_data['Productivity Factor'] = migrated_data['Season'].apply(get_productivity_factor)
+migrated_data['Risk Score'] = migrated_data['Average'] * migrated_data['Migration Factor'] * migrated_data['Productivity Factor']
+migrated_data['Risk Score'] = migrated_data['Risk Score'].fillna(migrated_data['Risk Score'].mean())
 
 # Normalize data for clustering
 scaler = StandardScaler()
 features = ['GPS lat', 'GPS long', 'Risk Score']
 
 # Perform normalization
-normalized_data = scaler.fit_transform(bat_data[features])
+normalized_data = scaler.fit_transform(migrated_data[features])
 
 # Impute missing values in the normalized data
 imputer = SimpleImputer(strategy='mean')
@@ -103,11 +126,24 @@ normalized_data = imputer.fit_transform(normalized_data)
 kmeans = KMeans(n_clusters=5, random_state=42)
 
 # Perform clustering on the imputed normalized data
-bat_data['Cluster'] = kmeans.fit_predict(normalized_data)
+migrated_data['Cluster'] = kmeans.fit_predict(normalized_data)
+
+# Normalize the risk scores to a fixed range for consistent color scaling
+min_max_scaler = MinMaxScaler(feature_range=(0, 1))
+migrated_data['Normalized Risk Score'] = min_max_scaler.fit_transform(migrated_data[['Risk Score']])
+
+# Sample data based on the season to adjust the density of the heatmap
+season = get_season(selected_date)
+if season == 'winter':
+    sampled_data = migrated_data.sample(frac=0.2, random_state=42)
+elif season in ['spring', 'fall']:
+    sampled_data = migrated_data.sample(frac=0.7, random_state=42)
+else:  # summer
+    sampled_data = migrated_data
 
 # Generate a CSV file for high-risk zones based on bat migrations and risk scores
-high_risk_zones = bat_data[['GPS lat', 'GPS long', 'Risk Score']]
-high_risk_zones.to_csv(f'ebola_risk_zones_month_{selected_month}.csv', index=False)
+high_risk_zones = sampled_data[['GPS lat', 'GPS long', 'Normalized Risk Score']]
+high_risk_zones.to_csv(f'ebola_risk_zones_{selected_date.strftime("%Y_%m_%d")}.csv', index=False)
 
 # Load population data CSV
 population_data = pd.read_csv('africa_population_density.csv')
@@ -123,7 +159,7 @@ high_risk_zones['Country'] = high_risk_zones.apply(
 )
 
 # Aggregate risk scores by country
-country_risk = high_risk_zones.groupby('Country')['Risk Score'].max().reset_index()
+country_risk = high_risk_zones.groupby('Country')['Normalized Risk Score'].max().reset_index()
 
 # Debugging: Print some data to check
 print(high_risk_zones.head())
@@ -134,12 +170,13 @@ fig = px.density_mapbox(
     high_risk_zones, 
     lat='GPS lat', 
     lon='GPS long', 
-    z='Risk Score', 
+    z='Normalized Risk Score', 
     radius=20,
     center=dict(lat=0, lon=20),  # Center the map around equatorial Africa
     zoom=2,
     mapbox_style="open-street-map",
-    title=f"Ebola Risk Heatmap for Month {selected_month}"
+    title=f"Ebola Risk Heatmap for {selected_date.strftime('%Y-%m-%d')}",
+    color_continuous_scale=px.colors.sequential.Viridis  # Change color scale to keep map consistent
 )
 
 # Show the map
