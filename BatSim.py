@@ -70,6 +70,24 @@ for month in range(1, 13):
     migrated_data['Risk Score'] = migrated_data['Risk Score'].fillna(migrated_data['Risk Score'].mean())
     monthly_migrations[month] = migrated_data
 
+# Function to input the month manually
+def get_user_month():
+    while True:
+        try:
+            month = int(input("Enter the month (1-12): "))
+            if 1 <= month <= 12:
+                return month
+            else:
+                print("Please enter a valid month number between 1 and 12.")
+        except ValueError:
+            print("Invalid input! Please enter a number between 1 and 12.")
+
+# Get user-selected month
+selected_month = get_user_month()
+
+# Use the pre-simulated data for the selected month
+bat_data = monthly_migrations[selected_month]
+
 # Normalize data for clustering
 scaler = StandardScaler()
 features = ['GPS lat', 'GPS long', 'Risk Score']
@@ -87,11 +105,9 @@ kmeans = KMeans(n_clusters=5, random_state=42)
 # Perform clustering on the imputed normalized data
 bat_data['Cluster'] = kmeans.fit_predict(normalized_data)
 
-# Generate CSV files for high-risk zones based on bat migrations and risk scores for each month
-for month in range(1, 13):
-    bat_data = monthly_migrations[month]
-    high_risk_zones = bat_data[['GPS lat', 'GPS long', 'Risk Score']]
-    high_risk_zones.to_csv(f'ebola_risk_zones_month_{month}.csv', index=False)
+# Generate a CSV file for high-risk zones based on bat migrations and risk scores
+high_risk_zones = bat_data[['GPS lat', 'GPS long', 'Risk Score']]
+high_risk_zones.to_csv(f'ebola_risk_zones_month_{selected_month}.csv', index=False)
 
 # Load population data CSV
 population_data = pd.read_csv('africa_population_density.csv')
@@ -102,19 +118,18 @@ def find_nearest_country(lat, lon):
     nearest_country_index = distances.idxmin()
     return population_data.iloc[nearest_country_index]['Country']
 
-# Aggregate risk scores by country for each month
-for month in range(1, 13):
-    high_risk_zones = pd.read_csv(f'ebola_risk_zones_month_{month}.csv')
-    high_risk_zones['Country'] = high_risk_zones.apply(
-        lambda row: find_nearest_country(row['GPS lat'], row['GPS long']), axis=1
-    )
-    country_risk = high_risk_zones.groupby('Country')['Risk Score'].max().reset_index()
-    country_risk.to_csv(f'country_risk_month_{month}.csv', index=False)
+high_risk_zones['Country'] = high_risk_zones.apply(
+    lambda row: find_nearest_country(row['GPS lat'], row['GPS long']), axis=1
+)
 
-# Plot the heatmap for the last month (December) using Plotly
-bat_data = monthly_migrations[12]
-high_risk_zones = bat_data[['GPS lat', 'GPS long', 'Risk Score']]
+# Aggregate risk scores by country
+country_risk = high_risk_zones.groupby('Country')['Risk Score'].max().reset_index()
 
+# Debugging: Print some data to check
+print(high_risk_zones.head())
+print(country_risk.head())
+
+# Plot the heatmap using Plotly
 fig = px.density_mapbox(
     high_risk_zones, 
     lat='GPS lat', 
@@ -123,8 +138,8 @@ fig = px.density_mapbox(
     radius=20,
     center=dict(lat=0, lon=20),  # Center the map around equatorial Africa
     zoom=2,
-    mapbox_style="carto-positron",  # Use a free map style
-    title=f"Ebola Risk Heatmap for Month 12"
+    mapbox_style="open-street-map",
+    title=f"Ebola Risk Heatmap for Month {selected_month}"
 )
 
 # Show the map
