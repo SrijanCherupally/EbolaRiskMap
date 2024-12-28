@@ -161,10 +161,6 @@ high_risk_zones['Country'] = high_risk_zones.apply(
 # Aggregate risk scores by country
 country_risk = high_risk_zones.groupby('Country')['Normalized Risk Score'].max().reset_index()
 
-# Debugging: Print some data to check
-print(high_risk_zones.head())
-print(country_risk.head())
-
 # Plot the heatmap using Plotly
 fig = px.density_mapbox(
     high_risk_zones, 
