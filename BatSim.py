@@ -29,7 +29,7 @@ def clean_coordinates(coord):
         return None
 
 # Load bat database
-bat_data = pd.read_csv('Bat Database.csv')
+bat_data = pd.read_csv('Refined_Augmented_Bat_Database.csv')
 bat_data['Average'] = bat_data['Samples'].apply(compute_average)
 bat_data['GPS lat'] = bat_data['GPS lat'].apply(clean_coordinates)
 bat_data['GPS long'] = bat_data['GPS long'].apply(clean_coordinates)
